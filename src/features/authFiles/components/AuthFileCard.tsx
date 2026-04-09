@@ -55,8 +55,9 @@ export type AuthFileCardProps = {
 
 const resolveQuotaType = (file: AuthFileItem): QuotaProviderType | null => {
   const provider = resolveAuthProvider(file);
-  if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return null;
-  return provider as QuotaProviderType;
+  const normalizedProvider = provider === 'copilot' ? 'github-copilot' : provider;
+  if (!QUOTA_PROVIDER_TYPES.has(normalizedProvider as QuotaProviderType)) return null;
+  return normalizedProvider as QuotaProviderType;
 };
 
 export function AuthFileCard(props: AuthFileCardProps) {
@@ -100,11 +101,13 @@ export function AuthFileCard(props: AuthFileCardProps) {
         ? styles.claudeCard
         : quotaType === 'codex'
           ? styles.codexCard
-          : quotaType === 'gemini-cli'
-            ? styles.geminiCliCard
-            : quotaType === 'kimi'
-              ? styles.kimiCard
-              : '';
+          : quotaType === 'github-copilot'
+            ? styles.githubCopilotCard
+            : quotaType === 'gemini-cli'
+              ? styles.geminiCliCard
+              : quotaType === 'kimi'
+                ? styles.kimiCard
+                : '';
 
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndexKey = normalizeAuthIndex(rawAuthIndex);
