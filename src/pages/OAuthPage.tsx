@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -71,16 +72,59 @@ function getErrorStatus(error: unknown): number | undefined {
   return typeof error.status === 'number' ? error.status : undefined;
 }
 
-const PROVIDERS: { id: OAuthProvider; titleKey: string; hintKey: string; urlLabelKey: string; icon: string | { light: string; dark: string } }[] = [
-  { id: 'codex', titleKey: 'auth_login.codex_oauth_title', hintKey: 'auth_login.codex_oauth_hint', urlLabelKey: 'auth_login.codex_oauth_url_label', icon: iconCodex },
-  { id: 'anthropic', titleKey: 'auth_login.anthropic_oauth_title', hintKey: 'auth_login.anthropic_oauth_hint', urlLabelKey: 'auth_login.anthropic_oauth_url_label', icon: iconClaude },
-  { id: 'antigravity', titleKey: 'auth_login.antigravity_oauth_title', hintKey: 'auth_login.antigravity_oauth_hint', urlLabelKey: 'auth_login.antigravity_oauth_url_label', icon: iconAntigravity },
-  { id: 'gemini-cli', titleKey: 'auth_login.gemini_cli_oauth_title', hintKey: 'auth_login.gemini_cli_oauth_hint', urlLabelKey: 'auth_login.gemini_cli_oauth_url_label', icon: iconGemini },
-  { id: 'github', titleKey: 'auth_login.github_oauth_title', hintKey: 'auth_login.github_oauth_hint', urlLabelKey: 'auth_login.github_oauth_url_label', icon: { light: IconGithubLight, dark: IconGithubDark } },
-  { id: 'kimi', titleKey: 'auth_login.kimi_oauth_title', hintKey: 'auth_login.kimi_oauth_hint', urlLabelKey: 'auth_login.kimi_oauth_url_label', icon: { light: iconKimiLight, dark: iconKimiDark } }
+const PROVIDERS: {
+  id: OAuthProvider;
+  titleKey: string;
+  hintKey: string;
+  urlLabelKey: string;
+  icon: string | { light: string; dark: string };
+}[] = [
+  {
+    id: 'codex',
+    titleKey: 'auth_login.codex_oauth_title',
+    hintKey: 'auth_login.codex_oauth_hint',
+    urlLabelKey: 'auth_login.codex_oauth_url_label',
+    icon: iconCodex,
+  },
+  {
+    id: 'anthropic',
+    titleKey: 'auth_login.anthropic_oauth_title',
+    hintKey: 'auth_login.anthropic_oauth_hint',
+    urlLabelKey: 'auth_login.anthropic_oauth_url_label',
+    icon: iconClaude,
+  },
+  {
+    id: 'antigravity',
+    titleKey: 'auth_login.antigravity_oauth_title',
+    hintKey: 'auth_login.antigravity_oauth_hint',
+    urlLabelKey: 'auth_login.antigravity_oauth_url_label',
+    icon: iconAntigravity,
+  },
+  {
+    id: 'gemini-cli',
+    titleKey: 'auth_login.gemini_cli_oauth_title',
+    hintKey: 'auth_login.gemini_cli_oauth_hint',
+    urlLabelKey: 'auth_login.gemini_cli_oauth_url_label',
+    icon: iconGemini,
+  },
+  {
+    id: 'github',
+    titleKey: 'auth_login.github_oauth_title',
+    hintKey: 'auth_login.github_oauth_hint',
+    urlLabelKey: 'auth_login.github_oauth_url_label',
+    icon: { light: IconGithubLight, dark: IconGithubDark },
+  },
+  {
+    id: 'kimi',
+    titleKey: 'auth_login.kimi_oauth_title',
+    hintKey: 'auth_login.kimi_oauth_hint',
+    urlLabelKey: 'auth_login.kimi_oauth_url_label',
+    icon: { light: iconKimiLight, dark: iconKimiDark },
+  },
 ];
 
 const CALLBACK_SUPPORTED: OAuthProvider[] = ['codex', 'anthropic', 'antigravity', 'gemini-cli'];
+const SUCCESS_RESET_DELAY_MS = 5000;
 const getProviderI18nPrefix = (provider: OAuthProvider) => provider.replace('-', '_');
 const getAuthKey = (provider: OAuthProvider, suffix: string) =>
   `auth_login.${getProviderI18nPrefix(provider)}_${suffix}`;
@@ -100,31 +144,83 @@ const getIcon = (icon: string | { light: string; dark: string }, theme: 'light' 
 
 export function OAuthPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { showNotification } = useNotificationStore();
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
-  const [states, setStates] = useState<Record<OAuthProvider, ProviderState>>({} as Record<OAuthProvider, ProviderState>);
+  const [states, setStates] = useState<Record<OAuthProvider, ProviderState>>(
+    {} as Record<OAuthProvider, ProviderState>
+  );
   const [vertexState, setVertexState] = useState<VertexImportState>({
     fileName: '',
     location: '',
     loading: false,
   });
-  const timers = useRef<Partial<Record<OAuthProvider, number>>>({});
+  const pollingTimers = useRef<Partial<Record<OAuthProvider, number>>>({});
+  const successResetTimers = useRef<Partial<Record<OAuthProvider, number>>>({});
   const vertexFileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const updateProviderState = useCallback(
+    (provider: OAuthProvider, next: Partial<ProviderState>) => {
+      setStates((prev) => ({
+        ...prev,
+        [provider]: { ...(prev[provider] ?? {}), ...next },
+      }));
+    },
+    []
+  );
+
   const clearPollingTimer = useCallback((provider: OAuthProvider) => {
-    const timer = timers.current[provider];
+    const timer = pollingTimers.current[provider];
     if (typeof timer === 'number') {
       window.clearTimeout(timer);
-      delete timers.current[provider];
+      delete pollingTimers.current[provider];
     }
   }, []);
 
+  const clearSuccessResetTimer = useCallback((provider: OAuthProvider) => {
+    const timer = successResetTimers.current[provider];
+    if (typeof timer === 'number') {
+      window.clearTimeout(timer);
+      delete successResetTimers.current[provider];
+    }
+  }, []);
+
+  const clearProviderTimers = useCallback(
+    (provider: OAuthProvider) => {
+      clearPollingTimer(provider);
+      clearSuccessResetTimer(provider);
+    },
+    [clearPollingTimer, clearSuccessResetTimer]
+  );
+
+  const resetProviderAttempt = useCallback(
+    (provider: OAuthProvider) => {
+      clearProviderTimers(provider);
+      setStates((prev) => {
+        const current = prev[provider] ?? {};
+        const next: ProviderState = {};
+        if (provider === 'gemini-cli' && current.projectId !== undefined) {
+          next.projectId = current.projectId;
+        }
+        return {
+          ...prev,
+          [provider]: next,
+        };
+      });
+    },
+    [clearProviderTimers]
+  );
+
   const clearTimers = useCallback(() => {
-    (Object.keys(timers.current) as OAuthProvider[]).forEach((provider) => {
+    (Object.keys(pollingTimers.current) as OAuthProvider[]).forEach((provider) => {
       clearPollingTimer(provider);
     });
-    timers.current = {};
-  }, [clearPollingTimer]);
+    (Object.keys(successResetTimers.current) as OAuthProvider[]).forEach((provider) => {
+      clearSuccessResetTimer(provider);
+    });
+    pollingTimers.current = {};
+    successResetTimers.current = {};
+  }, [clearPollingTimer, clearSuccessResetTimer]);
 
   useEffect(() => {
     return () => {
@@ -132,51 +228,71 @@ export function OAuthPage() {
     };
   }, [clearTimers]);
 
-  const updateProviderState = (provider: OAuthProvider, next: Partial<ProviderState>) => {
-    setStates((prev) => ({
-      ...prev,
-      [provider]: { ...(prev[provider] ?? {}), ...next },
-    }));
-  };
+  const completeProviderAuth = useCallback(
+    (provider: OAuthProvider) => {
+      clearPollingTimer(provider);
+      clearSuccessResetTimer(provider);
+      updateProviderState(provider, {
+        url: undefined,
+        state: undefined,
+        status: 'success',
+        error: undefined,
+        polling: false,
+        callbackUrl: '',
+        callbackSubmitting: false,
+        callbackStatus: undefined,
+        callbackError: undefined,
+        userCode: undefined,
+        verificationUrl: undefined,
+        verificationUrlComplete: undefined,
+        interval: undefined,
+        expiresIn: undefined,
+        expiresAt: undefined,
+      });
+      successResetTimers.current[provider] = window.setTimeout(() => {
+        resetProviderAttempt(provider);
+      }, SUCCESS_RESET_DELAY_MS);
+    },
+    [clearPollingTimer, clearSuccessResetTimer, resetProviderAttempt, updateProviderState]
+  );
 
-  const startPolling = (
-    provider: OAuthProvider,
-    state: string,
-    intervalMs = DEFAULT_POLLING_INTERVAL_MS
-  ) => {
-    clearPollingTimer(provider);
+  const startPolling = useCallback(
+    (provider: OAuthProvider, state: string, intervalMs = DEFAULT_POLLING_INTERVAL_MS) => {
+      clearPollingTimer(provider);
 
-    const poll = async () => {
-      try {
-        const res = await oauthApi.getAuthStatus(state);
-        if (res.status === 'ok') {
-          updateProviderState(provider, { status: 'success', polling: false });
-          showNotification(t(getAuthKey(provider, 'oauth_status_success')), 'success');
+      const poll = async () => {
+        try {
+          const res = await oauthApi.getAuthStatus(state);
+          if (res.status === 'ok') {
+            completeProviderAuth(provider);
+            showNotification(t(getAuthKey(provider, 'oauth_status_success')), 'success');
+          } else if (res.status === 'error') {
+            updateProviderState(provider, { status: 'error', error: res.error, polling: false });
+            showNotification(
+              `${t(getAuthKey(provider, 'oauth_status_error'))} ${res.error || ''}`,
+              'error'
+            );
+            clearPollingTimer(provider);
+          } else {
+            pollingTimers.current[provider] = window.setTimeout(poll, intervalMs);
+          }
+        } catch (err: unknown) {
+          updateProviderState(provider, {
+            status: 'error',
+            error: getErrorMessage(err),
+            polling: false,
+          });
           clearPollingTimer(provider);
-        } else if (res.status === 'error') {
-          updateProviderState(provider, { status: 'error', error: res.error, polling: false });
-          showNotification(
-            `${t(getAuthKey(provider, 'oauth_status_error'))} ${res.error || ''}`,
-            'error'
-          );
-          clearPollingTimer(provider);
-        } else {
-          timers.current[provider] = window.setTimeout(poll, intervalMs);
         }
-      } catch (err: unknown) {
-        updateProviderState(provider, {
-          status: 'error',
-          error: getErrorMessage(err),
-          polling: false,
-        });
-        clearPollingTimer(provider);
-      }
-    };
+      };
 
-    void poll();
-  };
+      void poll();
+    },
+    [clearPollingTimer, completeProviderAuth, showNotification, t, updateProviderState]
+  );
 
   const startAuth = async (provider: OAuthProvider) => {
+    clearProviderTimers(provider);
     const geminiState = provider === 'gemini-cli' ? states[provider] : undefined;
     const rawProjectId = provider === 'gemini-cli' ? (geminiState?.projectId || '').trim() : '';
     const projectId = rawProjectId
@@ -189,6 +305,8 @@ export function OAuthPage() {
       updateProviderState(provider, { projectIdError: undefined });
     }
     updateProviderState(provider, {
+      url: undefined,
+      state: undefined,
       status: 'waiting',
       polling: true,
       error: undefined,
@@ -219,6 +337,25 @@ export function OAuthPage() {
       const expiresIn = getDeviceFlowValue(res.expires_in, res.expiresIn);
       const expiresAt = getDeviceFlowValue(res.expires_at, res.expiresAt);
 
+      if (!res.state) {
+        const message = t('auth_login.missing_state');
+        updateProviderState(provider, {
+          url: res.url,
+          state: undefined,
+          status: 'error',
+          error: message,
+          polling: false,
+          userCode,
+          verificationUrl,
+          verificationUrlComplete,
+          interval: res.interval,
+          expiresIn,
+          expiresAt,
+        });
+        showNotification(message, 'error');
+        return;
+      }
+
       updateProviderState(provider, {
         url: res.url,
         state: res.state,
@@ -231,17 +368,13 @@ export function OAuthPage() {
         expiresIn,
         expiresAt,
       });
-      if (res.state) {
-        startPolling(
-          provider,
-          res.state,
-          provider === 'github'
-            ? resolveGitHubPollingInterval(res.interval)
-            : DEFAULT_POLLING_INTERVAL_MS
-        );
-      } else {
-        updateProviderState(provider, { polling: false });
-      }
+      startPolling(
+        provider,
+        res.state,
+        provider === 'github'
+          ? resolveGitHubPollingInterval(res.interval)
+          : DEFAULT_POLLING_INTERVAL_MS
+      );
     } catch (err: unknown) {
       const message = getErrorMessage(err);
       updateProviderState(provider, { status: 'error', error: message, polling: false });
@@ -291,8 +424,8 @@ export function OAuthPage() {
       const errorMessage =
         status === 404
           ? t('auth_login.oauth_callback_upgrade_hint', {
-            defaultValue: 'Please update CLI Proxy API or check the connection.',
-          })
+              defaultValue: 'Please update CLI Proxy API or check the connection.',
+            })
           : message || undefined;
       updateProviderState(provider, {
         callbackSubmitting: false,
@@ -384,6 +517,17 @@ export function OAuthPage() {
               typeof state.expiresIn === 'number' ||
               state.expiresAt
             );
+          const loginButtonLabel =
+            state.status === 'success'
+              ? t('auth_login.login_another_account')
+              : t(getAuthKey(provider.id, 'oauth_button'));
+          const statusBadgeClassName = [
+            'status-badge',
+            state.status === 'success' ? 'success' : '',
+            state.status === 'error' ? 'error' : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
           return (
             <div key={provider.id}>
               <Card
@@ -399,7 +543,7 @@ export function OAuthPage() {
                 }
                 extra={
                   <Button onClick={() => startAuth(provider.id)} loading={state.polling}>
-                    {t('common.login')}
+                    {loginButtonLabel}
                   </Button>
                 }
               >
@@ -524,12 +668,19 @@ export function OAuthPage() {
                     </div>
                   )}
                   {state.status && state.status !== 'idle' && (
-                    <div className="status-badge">
+                    <div className={statusBadgeClassName}>
                       {state.status === 'success'
                         ? t(getAuthKey(provider.id, 'oauth_status_success'))
                         : state.status === 'error'
                           ? `${t(getAuthKey(provider.id, 'oauth_status_error'))} ${state.error || ''}`
                           : t(getAuthKey(provider.id, 'oauth_status_waiting'))}
+                    </div>
+                  )}
+                  {state.status === 'success' && (
+                    <div className={styles.successActions}>
+                      <Button variant="secondary" size="sm" onClick={() => navigate('/auth-files')}>
+                        {t('auth_login.view_auth_files')}
+                      </Button>
                     </div>
                   )}
                 </div>
